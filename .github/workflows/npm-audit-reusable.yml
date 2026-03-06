@@ -7,6 +7,10 @@ jobs:
   audit-and-fix:
     runs-on: ubuntu-latest
 
+    concurrency:
+      group: npm-audit-${{ github.repository }}
+      cancel-in-progress: true
+
     permissions:
       contents: write
       pull-requests: write
@@ -37,7 +41,7 @@ jobs:
               echo "Running npm ci..."
               npm ci
 
-              echo "Running npm audit fix (prod + dev)..."
+              echo "Running npm audit fix..."
               npm audit fix || true
             else
               echo "Skipping $SERVICE_DIR (no package-lock.json found)"
@@ -54,22 +58,20 @@ jobs:
             echo "changed=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: Create branch and commit changes
+      - name: Configure git user
         if: steps.fix.outputs.changed == 'true'
         run: |
-          BRANCH=chore/npm-audit-$(date +%s)
-          git checkout -b $BRANCH
-          git add .
-          git commit -m "chore(security): automated npm audit fixes (all services)"
-          git push origin $BRANCH
-          echo "branch=$BRANCH" >> $GITHUB_ENV
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Create Pull Request
+      - name: Create or update Pull Request
         if: steps.fix.outputs.changed == 'true'
-        id: pr
+        id: cpr
         uses: peter-evans/create-pull-request@v5
         with:
-          branch: ${{ env.branch }}
+          branch: chore/npm-audit
+          base: main
+          commit-message: "chore(security): automated npm audit fixes (all services)"
           title: "chore(security): automated npm audit fixes"
           body: |
             🤖 Automated npm audit remediation (recursive).
@@ -78,16 +80,19 @@ jobs:
             - Used npm ci (lockfile enforced)
             - Fixed production and dev dependencies
             - No --force used
-            - Safe fixes only (major upgrades require manual intervention)
+            - Major upgrades require manual intervention
 
             This PR will auto-merge once all required CI checks pass.
           labels: |
             security
             automated
+          delete-branch: true
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Enable auto-merge
         if: steps.fix.outputs.changed == 'true'
         run: |
-          gh pr merge --auto --squash ${{ steps.pr.outputs.pull-request-number }}
+          echo "Enabling auto-merge..."
+          gh pr merge --auto --squash "${{ steps.cpr.outputs.pull-request-number }}"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
