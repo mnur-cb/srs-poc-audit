@@ -29,8 +29,9 @@ jobs:
         run: |
           echo "Starting recursive npm audit fix..."
 
-          for file in $(find ./services -name 'package.json' -not -path '*/node_modules/*'); do
+          for file in $(find ./services -type f -name 'package.json' -not -path '*/node_modules/*'); do
             SERVICE_DIR=$(dirname "$file")
+
             echo "--------------------------------------"
             echo "Processing $SERVICE_DIR"
             echo "--------------------------------------"
@@ -64,6 +65,12 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
+      - name: Stage only dependency definition files
+        if: steps.fix.outputs.changed == 'true'
+        run: |
+          git add $(find services -type f -name "package.json" -not -path "*/node_modules/*")
+          git add $(find services -type f -name "package-lock.json" -not -path "*/node_modules/*")
+
       - name: Create or update Pull Request
         if: steps.fix.outputs.changed == 'true'
         id: cpr
@@ -71,9 +78,6 @@ jobs:
         with:
           branch: chore/npm-audit
           base: main
-          add-paths: |
-            services/**/package.json
-            services/**/package-lock.json
           commit-message: "chore(security): automated npm audit fixes (all services)"
           title: "chore(security): automated npm audit fixes"
           body: |
