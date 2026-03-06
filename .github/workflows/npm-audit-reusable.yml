@@ -1,0 +1,93 @@
+name: NPM Audit Automation (Recursive)
+
+on:
+  workflow_call:
+
+jobs:
+  audit-and-fix:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Audit and fix all services
+        id: fix
+        run: |
+          echo "Starting recursive npm audit fix..."
+
+          for file in $(find ./services -name 'package.json' -not -path '*/node_modules/*'); do
+            SERVICE_DIR=$(dirname "$file")
+            echo "--------------------------------------"
+            echo "Processing $SERVICE_DIR"
+            echo "--------------------------------------"
+
+            pushd "$SERVICE_DIR"
+
+            if [ -f package-lock.json ]; then
+              echo "Running npm ci..."
+              npm ci
+
+              echo "Running npm audit fix (prod + dev)..."
+              npm audit fix || true
+            else
+              echo "Skipping $SERVICE_DIR (no package-lock.json found)"
+            fi
+
+            popd
+          done
+
+          if git diff --quiet; then
+            echo "No changes detected."
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "Changes detected."
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create branch and commit changes
+        if: steps.fix.outputs.changed == 'true'
+        run: |
+          BRANCH=chore/npm-audit-$(date +%s)
+          git checkout -b $BRANCH
+          git add .
+          git commit -m "chore(security): automated npm audit fixes (all services)"
+          git push origin $BRANCH
+          echo "branch=$BRANCH" >> $GITHUB_ENV
+
+      - name: Create Pull Request
+        if: steps.fix.outputs.changed == 'true'
+        id: pr
+        uses: peter-evans/create-pull-request@v5
+        with:
+          branch: ${{ env.branch }}
+          title: "chore(security): automated npm audit fixes"
+          body: |
+            🤖 Automated npm audit remediation (recursive).
+
+            - Scanned all services under ./services
+            - Used npm ci (lockfile enforced)
+            - Fixed production and dev dependencies
+            - No --force used
+            - Safe fixes only (major upgrades require manual intervention)
+
+            This PR will auto-merge once all required CI checks pass.
+          labels: |
+            security
+            automated
+
+      - name: Enable auto-merge
+        if: steps.fix.outputs.changed == 'true'
+        run: |
+          gh pr merge --auto --squash ${{ steps.pr.outputs.pull-request-number }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
