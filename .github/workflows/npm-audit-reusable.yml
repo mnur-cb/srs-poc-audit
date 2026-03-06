@@ -71,6 +71,9 @@ jobs:
         with:
           branch: chore/npm-audit
           base: main
+          add-paths: |
+            services/**/package.json
+            services/**/package-lock.json
           commit-message: "chore(security): automated npm audit fixes (all services)"
           title: "chore(security): automated npm audit fixes"
           body: |
