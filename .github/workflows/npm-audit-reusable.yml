@@ -22,12 +22,14 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 22
 
-      - name: Audit and fix all services
+      - name: Audit, fix, and validate services
         id: fix
         run: |
-          echo "Starting recursive npm audit fix..."
+          echo "Starting recursive npm audit fix with test validation..."
+
+          ANY_CHANGES=false
 
           for file in $(find ./services -type f -name 'package.json' -not -path '*/node_modules/*'); do
             SERVICE_DIR=$(dirname "$file")
@@ -38,25 +40,41 @@ jobs:
 
             pushd "$SERVICE_DIR"
 
-            if [ -f package-lock.json ]; then
-              echo "Running npm ci..."
-              npm ci
+            if [ ! -f package-lock.json ]; then
+              echo "No package-lock.json found. Skipping."
+              popd
+              continue
+            fi
 
-              echo "Running npm audit fix..."
-              npm audit fix || true
+            echo "Running npm ci..."
+            npm ci
+
+            echo "Running npm audit fix..."
+            npm audit fix || true
+
+            if git diff --quiet package.json package-lock.json; then
+              echo "No dependency changes for $SERVICE_DIR"
+              popd
+              continue
+            fi
+
+            echo "Running tests..."
+            if npm run test; then
+              echo "Tests passed for $SERVICE_DIR"
+              ANY_CHANGES=true
             else
-              echo "Skipping $SERVICE_DIR (no package-lock.json found)"
+              echo "Tests FAILED for $SERVICE_DIR — reverting changes"
+              git restore package.json package-lock.json
             fi
 
             popd
           done
 
-          if git diff --quiet; then
-            echo "No changes detected."
-            echo "changed=false" >> $GITHUB_OUTPUT
-          else
-            echo "Changes detected."
+          if [ "$ANY_CHANGES" = true ]; then
             echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "No valid changes to commit."
+            echo "changed=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Configure git user
@@ -78,14 +96,16 @@ jobs:
         with:
           branch: chore/npm-audit
           base: main
-          commit-message: "chore(security): automated npm audit fixes (all services)"
+          commit-message: "chore(security): automated npm audit fixes (validated)"
           title: "chore(security): automated npm audit fixes"
           body: |
             🤖 Automated npm audit remediation (recursive).
 
             - Scanned all services under ./services
             - Used npm ci (lockfile enforced)
-            - Fixed production and dev dependencies
+            - Ran npm audit fix
+            - Executed npm run test per service
+            - Reverted fixes for services with failing tests
             - No --force used
             - Major upgrades require manual intervention
 
@@ -99,7 +119,6 @@ jobs:
       - name: Enable auto-merge
         if: steps.fix.outputs.changed == 'true'
         run: |
-          echo "Enabling auto-merge..."
           gh pr merge --auto --squash "${{ steps.cpr.outputs.pull-request-number }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
