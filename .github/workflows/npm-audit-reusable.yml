@@ -27,7 +27,7 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Audit, fix, override, and validate services
+      - name: Audit, fix, override and validate services
         id: fix
         run: |
           echo "Starting npm audit remediation..."
@@ -51,85 +51,116 @@ jobs:
 
             npm ci
 
+            echo "--------------------------------------"
+            echo "Initial audit check"
+            echo "--------------------------------------"
+
+            npm audit --json > audit.json || true
+            TOTAL=$(jq '.metadata.vulnerabilities.total' audit.json)
+
+            if [ "$TOTAL" -eq 0 ]; then
+              echo "No vulnerabilities found. Skipping service."
+              popd
+              continue
+            fi
+
+            echo "--------------------------------------"
             echo "1. Safe fix"
+            echo "--------------------------------------"
+
             npm audit fix || true
-            echo "--------------------------------------"
-            echo "2. Force fix (if needed)"
-            echo "--------------------------------------"
-            if git diff --quiet package.json package-lock.json; then
-              npm audit fix --force || true
+
+            npm audit --json > audit.json || true
+            TOTAL=$(jq '.metadata.vulnerabilities.total' audit.json)
+
+            if [ "$TOTAL" -gt 0 ]; then
+
+              echo "--------------------------------------"
+              echo "2. Force fix (devDependencies only)"
+              echo "--------------------------------------"
+
+              ALLOW_FORCE=true
+
+              jq -r '
+                .vulnerabilities
+                | to_entries[]
+                | select(.value.isDirect == true)
+                | .key
+              ' audit.json > direct-vulns.txt
+
+              while read PKG; do
+                if jq -e --arg pkg "$PKG" '.devDependencies | has($pkg)' package.json > /dev/null; then
+                  echo "$PKG is devDependency."
+                else
+                  echo "$PKG is production dependency. Blocking force fix."
+                  ALLOW_FORCE=false
+                fi
+              done < direct-vulns.txt
+
+              if [ "$ALLOW_FORCE" = true ]; then
+                npm audit fix --force || true
+              else
+                echo "Force fix skipped."
+              fi
+            fi
+
+            npm audit --json > audit.json || true
+            TOTAL=$(jq '.metadata.vulnerabilities.total' audit.json)
+
+            if [ "$TOTAL" -gt 0 ]; then
+
+              echo "--------------------------------------"
+              echo "3. Dynamic override (devDependencies only)"
+              echo "--------------------------------------"
+
+              jq -r '
+                .vulnerabilities
+                | to_entries[]
+                | select(.value.fixAvailable == true and .value.isDirect == false)
+                | .key
+              ' audit.json > override-packages.txt
+
+              if [ -s override-packages.txt ]; then
+                while read PKG; do
+                  if jq -e --arg pkg "$PKG" '.devDependencies | has($pkg)' package.json > /dev/null; then
+                    LATEST=$(npm view "$PKG" version 2>/dev/null)
+                    if [ -n "$LATEST" ]; then
+                      echo "Override $PKG -> ^$LATEST"
+                      jq --arg pkg "$PKG" --arg ver "^$LATEST" \
+                        '.overrides[$pkg]=$ver' \
+                        package.json > package.tmp.json && mv package.tmp.json package.json
+                    fi
+                  else
+                    echo "$PKG not in devDependencies. Skipping override."
+                  fi
+                done < override-packages.txt
+
+                rm -rf node_modules package-lock.json
+                npm install
+              else
+                echo "No override candidates."
+              fi
             fi
 
             if ! git diff --quiet package.json package-lock.json; then
               echo "--------------------------------------"
-              echo "3. Validate changes"
+              echo "4. Validate changes"
               echo "--------------------------------------"
 
               if npm run | grep -q " test"; then
                 if npm run test; then
                   echo "Tests passed."
                   ANY_CHANGES=true
-                  popd
-                  continue
                 else
-                  echo "Tests failed. Reverting changes."
+                  echo "Tests failed. Reverting."
                   git restore package.json package-lock.json
                 fi
               else
                 echo "No test script defined. Accepting changes."
                 ANY_CHANGES=true
-                popd
-                continue
               fi
-            fi
-
-            echo "--------------------------------------"
-            echo "4. Check remaining vulnerabilities"
-            echo "--------------------------------------"
-            npm audit --json > audit.json || true
-
-            REMAINING=$(jq '.metadata.vulnerabilities.total' audit.json)
-
-            if [ "$REMAINING" -gt 0 ]; then
-                echo "Applying dynamic overrides"
-
-                jq -r '
-                .vulnerabilities
-                | to_entries[]
-                | select(.value.fixAvailable == true and .value.isDirect == false)
-                | .key
-                ' audit.json > override-packages.txt
-
-              if [ -s override-packages.txt ]; then
-                while read PKG; do
-                  LATEST=$(npm view "$PKG" version 2>/dev/null)
-                  if [ -n "$LATEST" ]; then
-                    echo "Override $PKG -> ^$LATEST"
-                    jq --arg pkg "$PKG" --arg ver "^$LATEST" \
-                      '.overrides[$pkg]=$ver' \
-                      package.json > package.tmp.json && mv package.tmp.json package.json
-                  fi
-                done < override-packages.txt
-
-                rm -rf node_modules package-lock.json
-                npm install
-
-                echo "Validate after override"
-                if npm run | grep -q " test"; then
-                  if npm run test; then
-                    echo "Tests passed with overrides."
-                    ANY_CHANGES=true
-                  else
-                    echo "Tests failed after override. Reverting."
-                    git restore package.json package-lock.json
-                  fi
-                else
-                  echo "No test script defined. Accepting overrides."
-                  ANY_CHANGES=true
-                fi
-              else
-                echo "No auto-fixable vulnerabilities."
-              fi
+            else
+              echo "No dependency changes."
             fi
 
             popd
@@ -147,7 +178,7 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Stage only dependency definition files
+      - name: Stage dependency files only
         if: steps.fix.outputs.changed == 'true'
         run: |
           git add $(find services -type f -name "package.json" -not -path "*/node_modules/*")
@@ -165,12 +196,11 @@ jobs:
           body: |
             Automated npm audit remediation.
 
-            - Safe fix attempted
-            - Force fix attempted
-            - Dynamic overrides applied when required
-            - npm run test executed per service
-            - Reverted services with failing tests
-            - Only validated fixes committed
+            - Safe fix applied
+            - Force fix limited to devDependencies
+            - Dynamic overrides limited to devDependencies
+            - Test validation performed
+            - Production dependencies not force-modified
 
             This PR will auto-merge once CI checks pass.
           labels: |
