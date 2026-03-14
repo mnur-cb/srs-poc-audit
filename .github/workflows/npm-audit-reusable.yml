@@ -53,14 +53,17 @@ jobs:
 
             echo "1. Safe fix"
             npm audit fix || true
-
+            echo "--------------------------------------"
             echo "2. Force fix (if needed)"
+            echo "--------------------------------------"
             if git diff --quiet package.json package-lock.json; then
               npm audit fix --force || true
             fi
 
             if ! git diff --quiet package.json package-lock.json; then
+              echo "--------------------------------------"
               echo "3. Validate changes"
+              echo "--------------------------------------"
 
               if npm run | grep -q " test"; then
                 if npm run test; then
@@ -80,20 +83,22 @@ jobs:
               fi
             fi
 
+            echo "--------------------------------------"
             echo "4. Check remaining vulnerabilities"
+            echo "--------------------------------------"
             npm audit --json > audit.json || true
 
             REMAINING=$(jq '.metadata.vulnerabilities.total' audit.json)
 
             if [ "$REMAINING" -gt 0 ]; then
-              echo "Applying dynamic overrides"
+                echo "Applying dynamic overrides"
 
-              jq -r '
+                jq -r '
                 .vulnerabilities
                 | to_entries[]
-                | select(.value.fixAvailable == true)
+                | select(.value.fixAvailable == true and .value.isDirect == false)
                 | .key
-              ' audit.json > override-packages.txt
+                ' audit.json > override-packages.txt
 
               if [ -s override-packages.txt ]; then
                 while read PKG; do
