@@ -1,4 +1,4 @@
-name: NPM Audit Automation (Recursive - Hybrid+Dynamic)
+name: NPM Audit Automation (Recursive - Hybrid Optimized)
 
 on:
   workflow_call:
@@ -33,6 +33,9 @@ jobs:
           echo "Starting npm audit remediation..."
 
           ANY_CHANGES=false
+          SUMMARY_FILE=$(mktemp)
+          echo "### Services Updated" > "$SUMMARY_FILE"
+          echo "" >> "$SUMMARY_FILE"
 
           for file in $(find ./services -type f -name 'package.json' -not -path '*/node_modules/*'); do
             SERVICE_DIR=$(dirname "$file")
@@ -51,12 +54,17 @@ jobs:
 
             npm ci
 
+            # Create isolated temp files
+            AUDIT_FILE=$(mktemp)
+            DIRECT_FILE=$(mktemp)
+            OVERRIDE_FILE=$(mktemp)
+
             echo "--------------------------------------"
             echo "Initial audit check"
             echo "--------------------------------------"
 
-            npm audit --json > audit.json || true
-            TOTAL=$(jq '.metadata.vulnerabilities.total' audit.json)
+            npm audit --json > "$AUDIT_FILE" || true
+            TOTAL=$(jq '.metadata.vulnerabilities.total' "$AUDIT_FILE")
 
             if [ "$TOTAL" -eq 0 ]; then
               echo "No vulnerabilities found. Skipping service."
@@ -70,11 +78,10 @@ jobs:
 
             npm audit fix || true
 
-            npm audit --json > audit.json || true
-            TOTAL=$(jq '.metadata.vulnerabilities.total' audit.json)
+            npm audit --json > "$AUDIT_FILE" || true
+            TOTAL=$(jq '.metadata.vulnerabilities.total' "$AUDIT_FILE")
 
             if [ "$TOTAL" -gt 0 ]; then
-
               echo "--------------------------------------"
               echo "2. Force fix (devDependencies only)"
               echo "--------------------------------------"
@@ -86,7 +93,7 @@ jobs:
                 | to_entries[]
                 | select(.value.isDirect == true)
                 | .key
-              ' audit.json > direct-vulns.txt
+              ' "$AUDIT_FILE" > "$DIRECT_FILE"
 
               while read PKG; do
                 if jq -e --arg pkg "$PKG" '.devDependencies | has($pkg)' package.json > /dev/null; then
@@ -95,7 +102,7 @@ jobs:
                   echo "$PKG is production dependency. Blocking force fix."
                   ALLOW_FORCE=false
                 fi
-              done < direct-vulns.txt
+              done < "$DIRECT_FILE"
 
               if [ "$ALLOW_FORCE" = true ]; then
                 npm audit fix --force || true
@@ -104,23 +111,24 @@ jobs:
               fi
             fi
 
-            npm audit --json > audit.json || true
-            TOTAL=$(jq '.metadata.vulnerabilities.total' audit.json)
+            npm audit --json > "$AUDIT_FILE" || true
+            TOTAL=$(jq '.metadata.vulnerabilities.total' "$AUDIT_FILE")
 
             if [ "$TOTAL" -gt 0 ]; then
-
               echo "--------------------------------------"
               echo "3. Dynamic override (devDependencies only)"
               echo "--------------------------------------"
+
+              OVERRIDE_APPLIED=false
 
               jq -r '
                 .vulnerabilities
                 | to_entries[]
                 | select(.value.fixAvailable == true and .value.isDirect == false)
                 | .key
-              ' audit.json > override-packages.txt
+              ' "$AUDIT_FILE" > "$OVERRIDE_FILE"
 
-              if [ -s override-packages.txt ]; then
+              if [ -s "$OVERRIDE_FILE" ]; then
                 while read PKG; do
                   if jq -e --arg pkg "$PKG" '.devDependencies | has($pkg)' package.json > /dev/null; then
                     LATEST=$(npm view "$PKG" version 2>/dev/null)
@@ -129,14 +137,19 @@ jobs:
                       jq --arg pkg "$PKG" --arg ver "^$LATEST" \
                         '.overrides[$pkg]=$ver' \
                         package.json > package.tmp.json && mv package.tmp.json package.json
+                      OVERRIDE_APPLIED=true
                     fi
                   else
                     echo "$PKG not in devDependencies. Skipping override."
                   fi
-                done < override-packages.txt
+                done < "$OVERRIDE_FILE"
 
-                rm -rf node_modules package-lock.json
-                npm install
+                if [ "$OVERRIDE_APPLIED" = true ]; then
+                  echo "Reinstalling with overrides..."
+                  npm install
+                else
+                  echo "No overrides applied. Skipping reinstall."
+                fi
               else
                 echo "No override candidates."
               fi
@@ -151,6 +164,17 @@ jobs:
                 if npm run test; then
                   echo "Tests passed."
                   ANY_CHANGES=true
+
+                  echo "- $SERVICE_DIR" >> "$SUMMARY_FILE"
+                  echo "  Changed dependencies:" >> "$SUMMARY_FILE"
+
+                  git diff package.json package-lock.json \
+                    | grep '^+' \
+                    | grep -E '"dependencies"|"devDependencies"|": "' \
+                    | sed 's/^+/    /' \
+                    >> "$SUMMARY_FILE"
+
+                  echo "" >> "$SUMMARY_FILE"
                 else
                   echo "Tests failed. Reverting."
                   git restore package.json package-lock.json
@@ -158,16 +182,33 @@ jobs:
               else
                 echo "No test script defined. Accepting changes."
                 ANY_CHANGES=true
+
+                echo "- $SERVICE_DIR" >> "$SUMMARY_FILE"
+                echo "  Changed dependencies:" >> "$SUMMARY_FILE"
+
+                git diff package.json package-lock.json \
+                  | grep '^+' \
+                  | grep -E '"dependencies"|"devDependencies"|": "' \
+                  | sed 's/^+/    /' \
+                  >> "$SUMMARY_FILE"
+
+                echo "" >> "$SUMMARY_FILE"
               fi
             else
               echo "No dependency changes."
             fi
+
+            # Cleanup temp files
+            rm -f "$AUDIT_FILE" "$DIRECT_FILE" "$OVERRIDE_FILE"
 
             popd
           done
 
           if [ "$ANY_CHANGES" = true ]; then
             echo "changed=true" >> $GITHUB_OUTPUT
+            echo "summary<<EOF" >> $GITHUB_OUTPUT
+            cat "$SUMMARY_FILE" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
           else
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
@@ -201,6 +242,8 @@ jobs:
             - Dynamic overrides limited to devDependencies
             - Test validation performed
             - Production dependencies not force-modified
+
+            ${{ steps.fix.outputs.summary }}
 
             This PR will auto-merge once CI checks pass.
           labels: |
