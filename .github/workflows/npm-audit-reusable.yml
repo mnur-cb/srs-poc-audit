@@ -160,47 +160,61 @@ jobs:
               echo "4. Validate changes"
               echo "--------------------------------------"
 
+              PKG_DIFF=false
+              LOCK_DIFF=false
+
+              if ! git diff --quiet package.json; then
+                PKG_DIFF=true
+              fi
+
+              if ! git diff --quiet package-lock.json; then
+                LOCK_DIFF=true
+              fi
+
+              VALIDATED=false
+
               if npm run | grep -q " test"; then
                 if npm run test; then
                   echo "Tests passed."
-                  ANY_CHANGES=true
-
-                  echo "- $SERVICE_DIR" >> "$SUMMARY_FILE"
-                  echo "  Changed dependencies:" >> "$SUMMARY_FILE"
-
-                  git diff package.json package-lock.json \
-                    | grep '^+' \
-                    | grep -E '"dependencies"|"devDependencies"|": "' \
-                    | sed 's/^+/    /' \
-                    >> "$SUMMARY_FILE"
-
-                  echo "" >> "$SUMMARY_FILE"
+                  VALIDATED=true
                 else
                   echo "Tests failed. Reverting."
                   git restore package.json package-lock.json
                 fi
               else
                 echo "No test script defined. Accepting changes."
+                VALIDATED=true
+              fi
+
+              if [ "$VALIDATED" = true ]; then
                 ANY_CHANGES=true
 
                 echo "- $SERVICE_DIR" >> "$SUMMARY_FILE"
-                echo "  Changed dependencies:" >> "$SUMMARY_FILE"
 
-                git diff package.json package-lock.json \
-                  | grep '^+' \
-                  | grep -E '"dependencies"|"devDependencies"|": "' \
-                  | sed 's/^+/    /' \
-                  >> "$SUMMARY_FILE"
+                if [ "$PKG_DIFF" = true ]; then
+                  echo "  Updated dependencies:" >> "$SUMMARY_FILE"
+
+                  git diff package.json \
+                    | grep '^+' \
+                    | grep -E '"[a-zA-Z0-9@/_-]+":' \
+                    | grep -v '"overrides"' \
+                    | sed 's/^+//' \
+                    | sed 's/[",]//g' \
+                    | sed 's/^/    /' \
+                    >> "$SUMMARY_FILE"
+
+                elif [ "$LOCK_DIFF" = true ]; then
+                  echo "  Transitive dependencies updated (lockfile only)." >> "$SUMMARY_FILE"
+                fi
 
                 echo "" >> "$SUMMARY_FILE"
               fi
+
             else
               echo "No dependency changes."
             fi
 
-            # Cleanup temp files
             rm -f "$AUDIT_FILE" "$DIRECT_FILE" "$OVERRIDE_FILE"
-
             popd
           done
 
