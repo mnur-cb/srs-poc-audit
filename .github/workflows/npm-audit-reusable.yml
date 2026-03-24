@@ -54,7 +54,9 @@ jobs:
 
             npm ci
 
-            # Create isolated temp files
+            ORIGINAL_PKG=$(mktemp)
+            cp package.json "$ORIGINAL_PKG"
+
             AUDIT_FILE=$(mktemp)
             DIRECT_FILE=$(mktemp)
             OVERRIDE_FILE=$(mktemp)
@@ -116,7 +118,7 @@ jobs:
 
             if [ "$TOTAL" -gt 0 ]; then
               echo "--------------------------------------"
-              echo "3. Dynamic override (devDependencies only)"
+              echo "3. Dynamic override (transitive dependencies only)"
               echo "--------------------------------------"
 
               OVERRIDE_APPLIED=false
@@ -130,12 +132,13 @@ jobs:
 
               if [ -s "$OVERRIDE_FILE" ]; then
                 while read PKG; do
-                  # Allow override only if package is not declared in production dependencies
+                  # Skip direct production dependencies
                   if jq -e --arg pkg "$PKG" '.dependencies | has($pkg)' package.json > /dev/null; then
                     echo "$PKG is a production dependency. Skipping override."
                     continue
                   fi
 
+                  # Skip direct devDependencies (must be upgraded explicitly)
                   if jq -e --arg pkg "$PKG" '.devDependencies | has($pkg)' package.json > /dev/null; then
                     echo "$PKG is a direct devDependency. Skipping override."
                     continue
@@ -197,16 +200,35 @@ jobs:
                 ANY_CHANGES=true
                 echo "- $SERVICE_DIR" >> "$SUMMARY_FILE"
 
-                if [ "$PKG_DIFF" = true ]; then
+                UPDATED_DEPS=$(jq -r --argfile old "$ORIGINAL_PKG" '
+                  def diff(a; b):
+                    (b // {}) as $b | (a // {}) as $a |
+                    ($b | to_entries[] | select($a[.key] != .value) | "\(.key): \(.value)");
+
+                  {
+                    dependencies: diff($old.dependencies; .dependencies),
+                    devDependencies: diff($old.devDependencies; .devDependencies),
+                    overrides: diff($old.overrides; .overrides)
+                  } | to_entries[]
+                    | select(.value != null and .value != "")
+                    | "\(.key)|\(.value)"
+                ' package.json)
+
+                if [ -n "$UPDATED_DEPS" ]; then
                   echo "  Updated dependencies:" >> "$SUMMARY_FILE"
-                  git diff package.json \
-                    | grep '^+' \
-                    | grep -E '"[a-zA-Z0-9@/_-]+":' \
-                    | grep -v '"overrides"' \
-                    | sed 's/^+//' \
-                    | sed 's/[",]//g' \
-                    | sed 's/^/    /' \
-                    >> "$SUMMARY_FILE"
+                  echo "$UPDATED_DEPS" | while IFS="|" read -r SECTION ENTRY; do
+                    case "$SECTION" in
+                      dependencies)
+                        echo "    [dependencies] $ENTRY" >> "$SUMMARY_FILE"
+                        ;;
+                      devDependencies)
+                        echo "    [devDependencies] $ENTRY" >> "$SUMMARY_FILE"
+                        ;;
+                      overrides)
+                        echo "    [overrides] $ENTRY" >> "$SUMMARY_FILE"
+                        ;;
+                    esac
+                  done
                 elif [ "$LOCK_DIFF" = true ]; then
                   echo "  Transitive dependencies updated (lockfile only)." >> "$SUMMARY_FILE"
                 fi
@@ -217,7 +239,7 @@ jobs:
               echo "No dependency changes."
             fi
 
-            rm -f "$AUDIT_FILE" "$DIRECT_FILE" "$OVERRIDE_FILE"
+            rm -f "$AUDIT_FILE" "$DIRECT_FILE" "$OVERRIDE_FILE" "$ORIGINAL_PKG"
             popd
           done
 
@@ -256,7 +278,7 @@ jobs:
 
             - Safe fix applied
             - Force fix limited to devDependencies
-            - Dynamic overrides limited to non-production dependencies
+            - Dynamic overrides applied only to transitive dependencies
             - Test validation performed
             - Production dependencies not force-modified
 
