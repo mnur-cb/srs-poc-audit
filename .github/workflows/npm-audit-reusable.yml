@@ -136,6 +136,11 @@ jobs:
                     continue
                   fi
 
+                  if jq -e --arg pkg "$PKG" '.devDependencies | has($pkg)' package.json > /dev/null; then
+                    echo "$PKG is a direct devDependency. Skipping override."
+                    continue
+                  fi
+
                   LATEST=$(npm view "$PKG" version 2>/dev/null)
                   if [ -n "$LATEST" ]; then
                     echo "Override $PKG -> ^$LATEST"
