@@ -204,18 +204,22 @@ jobs:
                 echo "- $SERVICE_DIR" >> "$SUMMARY_FILE"
 
                 UPDATED_DEPS=$(jq -r --slurpfile old "$ORIGINAL_PKG" '
-                  def diff(a; b):
-                    (b // {}) as $b | (a // {}) as $a |
-                    ($b | to_entries[] | select($a[.key] != .value) | "\(.key): \(.value)");
+                  def diff(old; new):
+                    (old // {}) as $old |
+                    (new // {}) as $new |
+                    $new
+                    | to_entries[]
+                    | select(($old[.key] // null) != .value)
+                    | "\(.key): \(.value)";
 
-                  {
-                    dependencies: diff($old[0].dependencies; .dependencies),
-                    devDependencies: diff($old[0].devDependencies; .devDependencies),
-                    overrides: diff($old[0].overrides; .overrides)
-                  } | to_entries[]
-                    | select(.value != null and .value != "")
-                    | "\(.key)|\(.value)"
-                ' package.json)
+                  [
+                    (diff($old[0].dependencies; .dependencies) | "dependencies|\(.)"),
+                    (diff($old[0].devDependencies; .devDependencies) | "devDependencies|\(.)"),
+                    (diff($old[0].overrides; .overrides) | "overrides|\(.)")
+                  ]
+                  | map(select(length > 0))
+                  | .[]
+                ')
 
                 if [ -n "$UPDATED_DEPS" ]; then
                   echo "  Updated dependencies:" >> "$SUMMARY_FILE"
