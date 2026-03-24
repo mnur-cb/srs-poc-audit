@@ -116,7 +116,7 @@ jobs:
 
             if [ "$TOTAL" -gt 0 ]; then
               echo "--------------------------------------"
-              echo "3. Dynamic override (devDependencies and their dependency trees)"
+              echo "3. Dynamic override (devDependencies only)"
               echo "--------------------------------------"
 
               OVERRIDE_APPLIED=false
@@ -130,28 +130,19 @@ jobs:
 
               if [ -s "$OVERRIDE_FILE" ]; then
                 while read PKG; do
-                  # Determine if vulnerable package is within devDependency tree
-                  IS_DEV_TREE=false
-                  for DEV_DEP in $(jq -r '.devDependencies | keys[]' package.json); do
-                    if npm ls "$PKG" --json | jq -e --arg dep "$DEV_DEP" '
-                      .dependencies[$dep]? | .. | objects | select(has("version")) | has("'"$PKG"'")
-                    ' > /dev/null 2>&1; then
-                      IS_DEV_TREE=true
-                      break
-                    fi
-                  done
+                  # Allow override only if package is not declared in production dependencies
+                  if jq -e --arg pkg "$PKG" '.dependencies | has($pkg)' package.json > /dev/null; then
+                    echo "$PKG is a production dependency. Skipping override."
+                    continue
+                  fi
 
-                  if [ "$IS_DEV_TREE" = true ]; then
-                    LATEST=$(npm view "$PKG" version 2>/dev/null)
-                    if [ -n "$LATEST" ]; then
-                      echo "Override $PKG -> ^$LATEST"
-                      jq --arg pkg "$PKG" --arg ver "^$LATEST" \
-                        '.overrides[$pkg]=$ver' \
-                        package.json > package.tmp.json && mv package.tmp.json package.json
-                      OVERRIDE_APPLIED=true
-                    fi
-                  else
-                    echo "$PKG is not within a devDependency tree. Skipping override."
+                  LATEST=$(npm view "$PKG" version 2>/dev/null)
+                  if [ -n "$LATEST" ]; then
+                    echo "Override $PKG -> ^$LATEST"
+                    jq --arg pkg "$PKG" --arg ver "^$LATEST" \
+                      '.overrides[$pkg]=$ver' \
+                      package.json > package.tmp.json && mv package.tmp.json package.json
+                    OVERRIDE_APPLIED=true
                   fi
                 done < "$OVERRIDE_FILE"
 
@@ -199,12 +190,10 @@ jobs:
 
               if [ "$VALIDATED" = true ]; then
                 ANY_CHANGES=true
-
                 echo "- $SERVICE_DIR" >> "$SUMMARY_FILE"
 
                 if [ "$PKG_DIFF" = true ]; then
                   echo "  Updated dependencies:" >> "$SUMMARY_FILE"
-
                   git diff package.json \
                     | grep '^+' \
                     | grep -E '"[a-zA-Z0-9@/_-]+":' \
@@ -213,14 +202,12 @@ jobs:
                     | sed 's/[",]//g' \
                     | sed 's/^/    /' \
                     >> "$SUMMARY_FILE"
-
                 elif [ "$LOCK_DIFF" = true ]; then
                   echo "  Transitive dependencies updated (lockfile only)." >> "$SUMMARY_FILE"
                 fi
 
                 echo "" >> "$SUMMARY_FILE"
               fi
-
             else
               echo "No dependency changes."
             fi
@@ -264,7 +251,7 @@ jobs:
 
             - Safe fix applied
             - Force fix limited to devDependencies
-            - Dynamic overrides applied to devDependency trees only
+            - Dynamic overrides limited to non-production dependencies
             - Test validation performed
             - Production dependencies not force-modified
 
