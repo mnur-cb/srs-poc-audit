@@ -30,6 +30,8 @@ jobs:
       - name: Audit, fix, override and validate services
         id: fix
         run: |
+          set -euo pipefail
+
           echo "Starting npm audit remediation..."
 
           ANY_CHANGES=false
@@ -44,11 +46,11 @@ jobs:
             echo "Processing $SERVICE_DIR"
             echo "--------------------------------------"
 
-            pushd "$SERVICE_DIR"
+            pushd "$SERVICE_DIR" > /dev/null
 
             if [ ! -f package-lock.json ]; then
               echo "No package-lock.json found. Skipping."
-              popd
+              popd > /dev/null
               continue
             fi
 
@@ -70,7 +72,8 @@ jobs:
 
             if [ "$TOTAL" -eq 0 ]; then
               echo "No vulnerabilities found. Skipping service."
-              popd
+              rm -f "$AUDIT_FILE" "$DIRECT_FILE" "$OVERRIDE_FILE" "$ORIGINAL_PKG"
+              popd > /dev/null
               continue
             fi
 
@@ -97,14 +100,16 @@ jobs:
                 | .key
               ' "$AUDIT_FILE" > "$DIRECT_FILE"
 
-              while read PKG; do
-                if jq -e --arg pkg "$PKG" '.devDependencies | has($pkg)' package.json > /dev/null; then
-                  echo "$PKG is devDependency."
-                else
-                  echo "$PKG is production dependency. Blocking force fix."
-                  ALLOW_FORCE=false
-                fi
-              done < "$DIRECT_FILE"
+              if [ -s "$DIRECT_FILE" ]; then
+                while read -r PKG; do
+                  if jq -e --arg pkg "$PKG" '.devDependencies | has($pkg)' package.json > /dev/null; then
+                    echo "$PKG is devDependency."
+                  else
+                    echo "$PKG is production dependency. Blocking force fix."
+                    ALLOW_FORCE=false
+                  fi
+                done < "$DIRECT_FILE"
+              fi
 
               if [ "$ALLOW_FORCE" = true ]; then
                 npm audit fix --force || true
@@ -131,20 +136,18 @@ jobs:
               ' "$AUDIT_FILE" > "$OVERRIDE_FILE"
 
               if [ -s "$OVERRIDE_FILE" ]; then
-                while read PKG; do
-                  # Skip direct production dependencies
+                while read -r PKG; do
                   if jq -e --arg pkg "$PKG" '.dependencies | has($pkg)' package.json > /dev/null; then
                     echo "$PKG is a production dependency. Skipping override."
                     continue
                   fi
 
-                  # Skip direct devDependencies (must be upgraded explicitly)
                   if jq -e --arg pkg "$PKG" '.devDependencies | has($pkg)' package.json > /dev/null; then
                     echo "$PKG is a direct devDependency. Skipping override."
                     continue
                   fi
 
-                  LATEST=$(npm view "$PKG" version 2>/dev/null)
+                  LATEST=$(npm view "$PKG" version 2>/dev/null || true)
                   if [ -n "$LATEST" ]; then
                     echo "Override $PKG -> ^$LATEST"
                     jq --arg pkg "$PKG" --arg ver "^$LATEST" \
@@ -200,15 +203,15 @@ jobs:
                 ANY_CHANGES=true
                 echo "- $SERVICE_DIR" >> "$SUMMARY_FILE"
 
-                UPDATED_DEPS=$(jq -r --argfile old "$ORIGINAL_PKG" '
+                UPDATED_DEPS=$(jq -r --slurpfile old "$ORIGINAL_PKG" '
                   def diff(a; b):
                     (b // {}) as $b | (a // {}) as $a |
                     ($b | to_entries[] | select($a[.key] != .value) | "\(.key): \(.value)");
 
                   {
-                    dependencies: diff($old.dependencies; .dependencies),
-                    devDependencies: diff($old.devDependencies; .devDependencies),
-                    overrides: diff($old.overrides; .overrides)
+                    dependencies: diff($old[0].dependencies; .dependencies),
+                    devDependencies: diff($old[0].devDependencies; .devDependencies),
+                    overrides: diff($old[0].overrides; .overrides)
                   } | to_entries[]
                     | select(.value != null and .value != "")
                     | "\(.key)|\(.value)"
@@ -240,7 +243,7 @@ jobs:
             fi
 
             rm -f "$AUDIT_FILE" "$DIRECT_FILE" "$OVERRIDE_FILE" "$ORIGINAL_PKG"
-            popd
+            popd > /dev/null
           done
 
           if [ "$ANY_CHANGES" = true ]; then
