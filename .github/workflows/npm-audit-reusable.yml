@@ -116,7 +116,7 @@ jobs:
 
             if [ "$TOTAL" -gt 0 ]; then
               echo "--------------------------------------"
-              echo "3. Dynamic override (devDependencies only)"
+              echo "3. Dynamic override (devDependencies and their dependency trees)"
               echo "--------------------------------------"
 
               OVERRIDE_APPLIED=false
@@ -130,7 +130,18 @@ jobs:
 
               if [ -s "$OVERRIDE_FILE" ]; then
                 while read PKG; do
-                  if jq -e --arg pkg "$PKG" '.devDependencies | has($pkg)' package.json > /dev/null; then
+                  # Determine if vulnerable package is within devDependency tree
+                  IS_DEV_TREE=false
+                  for DEV_DEP in $(jq -r '.devDependencies | keys[]' package.json); do
+                    if npm ls "$PKG" --json | jq -e --arg dep "$DEV_DEP" '
+                      .dependencies[$dep]? | .. | objects | select(has("version")) | has("'"$PKG"'")
+                    ' > /dev/null 2>&1; then
+                      IS_DEV_TREE=true
+                      break
+                    fi
+                  done
+
+                  if [ "$IS_DEV_TREE" = true ]; then
                     LATEST=$(npm view "$PKG" version 2>/dev/null)
                     if [ -n "$LATEST" ]; then
                       echo "Override $PKG -> ^$LATEST"
@@ -140,7 +151,7 @@ jobs:
                       OVERRIDE_APPLIED=true
                     fi
                   else
-                    echo "$PKG not in devDependencies. Skipping override."
+                    echo "$PKG is not within a devDependency tree. Skipping override."
                   fi
                 done < "$OVERRIDE_FILE"
 
@@ -253,7 +264,7 @@ jobs:
 
             - Safe fix applied
             - Force fix limited to devDependencies
-            - Dynamic overrides limited to devDependencies
+            - Dynamic overrides applied to devDependency trees only
             - Test validation performed
             - Production dependencies not force-modified
 
