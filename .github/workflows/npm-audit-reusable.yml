@@ -168,6 +168,54 @@ jobs:
               fi
             fi
 
+            echo "--------------------------------------"
+            echo "3.5 Prevent direct dependency downgrades"
+            echo "--------------------------------------"
+
+            DOWNGRADE_DETECTED=false
+            DOWNGRADE_ENTRIES=$(jq -r --slurpfile old "$ORIGINAL_PKG" '
+              def changed_specs(section):
+                ($old[0][section] // {}) as $o |
+                (. [section] // {}) as $n |
+                ([($o | keys[]?), ($n | keys[]?)] | unique)[] as $k |
+                select(($o | has($k)) and ($n | has($k)) and ($o[$k] != $n[$k])) |
+                "\(section)|\($k)|\($o[$k])|\($n[$k])";
+
+              [
+                changed_specs("dependencies"),
+                changed_specs("devDependencies"),
+                changed_specs("optionalDependencies"),
+                changed_specs("peerDependencies"),
+                changed_specs("overrides")
+              ]
+              | .[]
+            ' package.json)
+
+            if [ -n "$DOWNGRADE_ENTRIES" ]; then
+              while IFS="|" read -r SECTION PKG OLD_VER NEW_VER; do
+                [ -z "$SECTION" ] && continue
+
+                OLD_BASE=$(echo "$OLD_VER" | sed -E 's/^[^0-9]*//; s/[^0-9.].*$//')
+                NEW_BASE=$(echo "$NEW_VER" | sed -E 's/^[^0-9]*//; s/[^0-9.].*$//')
+
+                if [ -n "$OLD_BASE" ] && [ -n "$NEW_BASE" ]; then
+                  LOWEST=$(printf '%s\n%s\n' "$OLD_BASE" "$NEW_BASE" | sort -V | head -n1)
+                  if [ "$LOWEST" = "$NEW_BASE" ] && [ "$NEW_BASE" != "$OLD_BASE" ]; then
+                    echo "Downgrade blocked: [$SECTION] $PKG: $OLD_VER -> $NEW_VER"
+                    jq --arg sec "$SECTION" --arg pkg "$PKG" --arg ver "$OLD_VER" \
+                      '.[$sec][$pkg]=$ver' \
+                      package.json > package.tmp.json && mv package.tmp.json package.json
+                    DOWNGRADE_DETECTED=true
+                  fi
+                fi
+              done <<< "$DOWNGRADE_ENTRIES"
+            fi
+
+            if [ "$DOWNGRADE_DETECTED" = true ]; then
+              echo "Reinstalling after downgrade rollback..."
+              npm install
+            fi
+
             if ! git diff --quiet package.json package-lock.json; then
               echo "--------------------------------------"
               echo "4. Validate changes"
