@@ -227,7 +227,7 @@ jobs:
                   ]
                   | map(select(length > 0))
                   | .[]
-                ')
+                ' package.json)
 
                 if [ -n "$UPDATED_DEPS" ]; then
                   echo "  Updated dependencies:" >> "$SUMMARY_FILE"
