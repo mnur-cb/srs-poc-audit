@@ -204,18 +204,26 @@ jobs:
                 echo "- $SERVICE_DIR" >> "$SUMMARY_FILE"
 
                 UPDATED_DEPS=$(jq -r --slurpfile old "$ORIGINAL_PKG" '
-                  def diff(old; new):
+                  def changes(old; new):
                     (old // {}) as $old |
                     (new // {}) as $new |
-                    $new
-                    | to_entries[]
-                    | select(($old[.key] // null) != .value)
-                    | "\(.key): \(.value)";
+                    ([($old | keys[]?), ($new | keys[]?)] | unique)[] as $key |
+                    if (($old[$key] // null) == ($new[$key] // null)) then
+                      empty
+                    elif ($new | has($key) | not) then
+                      "\($key): REMOVED (was \($old[$key]))"
+                    elif ($old | has($key) | not) then
+                      "\($key): \($new[$key]) (added)"
+                    else
+                      "\($key): \($old[$key]) -> \($new[$key])"
+                    end;
 
                   [
-                    (diff($old[0].dependencies; .dependencies) | "dependencies|\(.)"),
-                    (diff($old[0].devDependencies; .devDependencies) | "devDependencies|\(.)"),
-                    (diff($old[0].overrides; .overrides) | "overrides|\(.)")
+                    (changes($old[0].dependencies; .dependencies) | "dependencies|\(.)"),
+                    (changes($old[0].devDependencies; .devDependencies) | "devDependencies|\(.)"),
+                    (changes($old[0].optionalDependencies; .optionalDependencies) | "optionalDependencies|\(.)"),
+                    (changes($old[0].peerDependencies; .peerDependencies) | "peerDependencies|\(.)"),
+                    (changes($old[0].overrides; .overrides) | "overrides|\(.)")
                   ]
                   | map(select(length > 0))
                   | .[]
@@ -231,13 +239,21 @@ jobs:
                       devDependencies)
                         echo "    [devDependencies] $ENTRY" >> "$SUMMARY_FILE"
                         ;;
+                      optionalDependencies)
+                        echo "    [optionalDependencies] $ENTRY" >> "$SUMMARY_FILE"
+                        ;;
+                      peerDependencies)
+                        echo "    [peerDependencies] $ENTRY" >> "$SUMMARY_FILE"
+                        ;;
                       overrides)
                         echo "    [overrides] $ENTRY" >> "$SUMMARY_FILE"
                         ;;
                     esac
                   done
-                elif [ "$LOCK_DIFF" = true ]; then
+                elif [ "$LOCK_DIFF" = true ] && [ "$PKG_DIFF" = false ]; then
                   echo "  Transitive dependencies updated (lockfile only)." >> "$SUMMARY_FILE"
+                elif [ "$PKG_DIFF" = true ]; then
+                  echo "  package.json updated (no dependency section changes detected)." >> "$SUMMARY_FILE"
                 fi
 
                 echo "" >> "$SUMMARY_FILE"
@@ -282,12 +298,6 @@ jobs:
           title: "chore(security): automated npm audit fixes"
           body: |
             Automated npm audit remediation.
-
-            - Safe fix applied
-            - Force fix limited to devDependencies
-            - Dynamic overrides applied only to transitive dependencies
-            - Test validation performed
-            - Production dependencies not force-modified
 
             ${{ steps.fix.outputs.summary }}
 
