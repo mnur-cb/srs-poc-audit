@@ -1,0 +1,51 @@
+flowchart TB
+    A[Start Workflow] --> B[For each service]
+    B --> C{package-lock.json exists?}
+    C -- No --> C1[Skip service]
+    C -- Yes --> D[npm ci]
+    D --> E[npm audit]
+
+    E -->|No vulnerabilities| F[Skip service]
+    E -->|Vulnerabilities found| G[Safe fix: npm audit fix]
+
+    G --> H[npm audit]
+    H -->|Still vulnerable| I{Direct vulns are devDependencies only?}
+    H -->|Resolved or reduced| J[Continue]
+
+    I -- Yes --> K[Force fix: npm audit fix --force]
+    I -- No --> K1[Skip force fix]
+    K --> L[npm audit]
+    K1 --> L
+
+    L -->|Still vulnerable| M[Dynamic override for eligible transitive deps]
+    L -->|Resolved or reduced| N[Continue]
+
+    M --> M1{Override written?}
+    M1 -- Yes --> M2[npm install]
+    M1 -- No --> N
+    M2 --> N
+
+    N --> O[Downgrade guard: deps/devDeps/optional/peer/overrides]
+    O --> O1{Any downgrade detected?}
+    O1 -- Yes --> O2[Restore original spec + npm install]
+    O1 -- No --> P
+    O2 --> P
+
+    P{git diff package.json or package-lock.json?}
+    P -- No --> P1[No dependency changes]
+    P -- Yes --> Q[Validate changes]
+
+    Q --> R{test script exists?}
+    R -- Yes --> S[npm run test]
+    R -- No --> T[Accept changes]
+
+    S -->|Pass| T
+    S -->|Fail| U[Revert package.json + package-lock.json]
+
+    T --> X[Mark changes found]
+
+    X --> Y[Create/Update PR]
+    Y --> Z[Attempt auto-merge after CI]
+
+    classDef decision fill:#f9f9f9,stroke:#666,stroke-width:1px;
+    class C,I,M1,O1,P,R decision;

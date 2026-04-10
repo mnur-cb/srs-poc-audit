@@ -12,13 +12,14 @@ For each service, it:
 2.  Detects vulnerabilities
 3.  Applies safe patch/minor fixes
 4.  Applies force fixes only for `devDependencies`
-5.  Injects dynamic overrides for vulnerable transitive dev dependencies
-6.  Validates changes using `npm run test`
-7.  Automatically creates a Pull Request with a detailed change summary
-8.  Auto-merges once CI checks pass
+5.  Injects dynamic overrides only for eligible transitive dependencies
+6.  Blocks dependency spec downgrades by restoring original versions
+7.  Validates changes using `npm run test` when a test script exists
+8.  Automatically creates a Pull Request with a factual change summary
+9.  Auto-merges once CI checks pass
 
-Aggressive fixes (force + overrides) are restricted to development
-dependencies only, ensuring runtime stability.
+Aggressive force fixes are restricted to `devDependencies`. Override
+injection is skipped for direct production and direct dev dependencies.
 
 ------------------------------------------------------------------------
 
@@ -32,12 +33,13 @@ dependencies only, ensuring runtime stability.
 
 ## Dependency Protection Rules
 
-| Action          | Production Dependencies | Dev Dependencies |
-|:----------------|:------------------------|:-----------------|
-| Safe Fix        | ✅ Allowed              | ✅ Allowed       |
-| Force Fix       | ❌ Blocked              | ✅ Allowed       |
-| Overrides       | ❌ Blocked              | ✅ Allowed       |
-| Test Validation | ✅ Required             | ✅ Required      |
+| Action                         | Direct Production Dependencies | Direct Dev Dependencies |
+|:-------------------------------|:-------------------------------|:------------------------|
+| Safe Fix                       | ✅ Allowed                     | ✅ Allowed              |
+| Force Fix                      | ❌ Blocked                     | ✅ Allowed              |
+| Dynamic Overrides              | ❌ Blocked                     | ❌ Blocked              |
+| Test Validation                | ✅ If test script exists       | ✅ If test script exists|
+| Downgrade Guard (spec version) | ✅ Blocked                     | ✅ Blocked              |
 
 ------------------------------------------------------------------------
 
@@ -46,9 +48,10 @@ dependencies only, ensuring runtime stability.
 -   Deterministic installs using `npm ci`
 -   No lockfile deletion
 -   No override of direct production dependencies
+-   No direct dependency downgrade commits (including overrides)
 -   No repository pollution (temp files isolated)
 -   Automatic test validation before commit
--   Transparent PR summaries per service
+-   Transparent, factual PR summaries per service
 
 ------------------------------------------------------------------------
 
@@ -57,8 +60,9 @@ dependencies only, ensuring runtime stability.
 1.  Apply safe fixes
 2.  Apply force fixes (dev-only)
 3.  Apply dynamic overrides (dev-only)
-4.  Validate via tests
-5.  Revert if unsafe
-6.  Commit only validated changes
+4.  Roll back detected dependency downgrades
+5.  Validate via tests when available
+6.  Revert if unsafe
+7.  Commit only validated changes
 
 This ensures maximum automation with minimal production risk.
