@@ -23,6 +23,38 @@ injection is skipped for direct production and direct dev dependencies.
 
 ------------------------------------------------------------------------
 
+## Usage Example
+
+Create a workflow in your repository (for example,
+`.github/workflows/security-automation.yml`) and call this reusable
+workflow:
+
+```yaml
+name: Security Automation
+
+on:
+  schedule:
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  security-fix:
+    uses: mnur-cb/srs-poc-audit/.github/workflows/npm-audit-reusable.yml@main
+    with:
+      jira_story: SAT-258381
+      enable_auto_merge: false
+    secrets: inherit
+```
+
+`jira_story` is optional. If provided, it is used as a prefix in the PR
+title and as the PR branch name.
+
+------------------------------------------------------------------------
+
 ## Architecture Overview
 
 ### Remediation Flow Diagram
