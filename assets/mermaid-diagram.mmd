@@ -2,8 +2,12 @@ flowchart TB
     A[Start Workflow] --> B[For each service]
     B --> C{package-lock.json exists?}
     C -- No --> C1[Skip service]
-    C -- Yes --> D[npm ci]
-    D --> E[npm audit]
+    C -- Yes --> D{package.json has overrides?}
+    D -- Yes --> D1[Remove overrides from package.json]
+    D1 --> D2[npm install]
+    D -- No --> D3[npm ci]
+    D2 --> E[npm audit]
+    D3 --> E
 
     E -->|No vulnerabilities| F[Skip service]
     E -->|Vulnerabilities found| G[Safe fix: npm audit fix]
@@ -48,4 +52,4 @@ flowchart TB
     Y --> Z[Attempt auto-merge after CI]
 
     classDef decision fill:#f9f9f9,stroke:#666,stroke-width:1px;
-    class C,I,M1,O1,P,R decision;
+    class C,D,I,M1,O1,P,R decision;

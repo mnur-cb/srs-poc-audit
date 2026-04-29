@@ -8,7 +8,7 @@ in the repository.
 
 For each service, it:
 
-1.  Runs a deterministic install (`npm ci`)
+1.  Removes existing `overrides` first when present, then installs dependencies (`npm install`); otherwise uses deterministic install (`npm ci`)
 2.  Detects vulnerabilities
 3.  Applies safe patch/minor fixes
 4.  Applies force fixes only for `devDependencies`
@@ -45,7 +45,8 @@ injection is skipped for direct production and direct dev dependencies.
 
 ## Design Principles
 
--   Deterministic installs using `npm ci`
+-   Deterministic installs using `npm ci` when no existing `overrides` are present
+-   Existing `overrides` are removed before remediation starts
 -   No lockfile deletion
 -   No override of direct production dependencies
 -   No direct dependency downgrade commits (including overrides)
