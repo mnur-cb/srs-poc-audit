@@ -8,6 +8,11 @@ on:
         required: false
         type: boolean
         default: false
+      jira_story:
+        description: Optional JIRA story key to prefix the PR title (for example, SAT-258381).
+        required: false
+        type: string
+        default: ''
 
 jobs:
   audit-and-fix:
@@ -357,7 +362,7 @@ jobs:
           branch: chore/npm-audit
           base: main
           commit-message: "chore(security): automated npm audit fixes"
-          title: "chore(security): automated npm audit fixes"
+          title: ${{ inputs.jira_story != '' && format('{0}: chore(security): automated npm audit fixes', inputs.jira_story) || 'chore(security): automated npm audit fixes' }}
           body: |
             Automated npm audit remediation.
 
