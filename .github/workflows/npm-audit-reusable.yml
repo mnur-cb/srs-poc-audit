@@ -2,6 +2,12 @@ name: NPM Audit Automation (Recursive - Hybrid Optimized)
 
 on:
   workflow_call:
+    inputs:
+      enable_auto_merge:
+        description: Enable PR auto-merge after checks pass.
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   audit-and-fix:
@@ -357,7 +363,7 @@ jobs:
 
             ${{ steps.fix.outputs.summary }}
 
-            This PR will auto-merge once CI checks pass.
+            ${{ inputs.enable_auto_merge && 'Auto-merge is enabled for this PR after CI checks pass.' || 'Auto-merge is disabled for this PR. Please review and merge manually.' }}
           labels: |
             security
             automated
@@ -365,7 +371,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Enable auto-merge
-        if: steps.fix.outputs.changed == 'true'
+        if: steps.fix.outputs.changed == 'true' && inputs.enable_auto_merge
         run: |
           gh pr merge --auto --squash "${{ steps.cpr.outputs.pull-request-number }}"
         env:
