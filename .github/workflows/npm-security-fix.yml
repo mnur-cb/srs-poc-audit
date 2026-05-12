@@ -13,9 +13,13 @@ on:
         required: false
         type: string
         default: ''
+  pull_request:
+    types:
+      - closed
 
 jobs:
   audit-and-fix:
+    if: github.event_name == 'workflow_call'
     runs-on: ubuntu-latest
 
     concurrency:
@@ -366,6 +370,8 @@ jobs:
           body: |
             Automated npm audit remediation.
 
+            Jira Story: ${{ inputs.jira_story != '' && inputs.jira_story || 'N/A' }}
+
             ${{ steps.fix.outputs.summary }}
 
             ${{ inputs.enable_auto_merge && 'Auto-merge is enabled for this PR after CI checks pass.' || 'Auto-merge is disabled for this PR. Please review and merge manually.' }}
@@ -381,3 +387,81 @@ jobs:
           gh pr merge --auto --squash "${{ steps.cpr.outputs.pull-request-number }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  post-jira-comment:
+    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: read
+
+    steps:
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Resolve Jira issue key
+        id: jira
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          DEFAULT_JIRA_KEY: SAT-258381
+        run: |
+          set -euo pipefail
+
+          ISSUE_KEY=$(printf '%s\n' "$PR_BODY" | sed -nE 's/.*Jira Story:[[:space:]]*([A-Z][A-Z0-9]+-[0-9]+).*/\1/p' | head -n1 || true)
+
+          if [ -z "$ISSUE_KEY" ]; then
+            ISSUE_KEY=$(printf '%s\n%s\n' "$PR_TITLE" "$PR_HEAD_REF" | grep -Eo '[A-Z][A-Z0-9]+-[0-9]+' | head -n1 || true)
+          fi
+
+          if [ -z "$ISSUE_KEY" ]; then
+            ISSUE_KEY="$DEFAULT_JIRA_KEY"
+          fi
+
+          echo "issue_key=$ISSUE_KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Post merged PR body to Jira
+        env:
+          JIRA_BASE_URL: https://collegeboard.atlassian.net
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          ISSUE_KEY: ${{ steps.jira.outputs.issue_key }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MERGED_BY: ${{ github.event.pull_request.merged_by.login }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${JIRA_USER_EMAIL:-}" ] || [ -z "${JIRA_API_TOKEN:-}" ]; then
+            echo "Required secrets are missing: JIRA_USER_EMAIL and/or JIRA_API_TOKEN"
+            exit 1
+          fi
+
+          COMMENT_PAYLOAD=$(jq -n \
+            --arg title "$PR_TITLE" \
+            --arg url "$PR_URL" \
+            --arg number "$PR_NUMBER" \
+            --arg mergedBy "$MERGED_BY" \
+            --arg body "${PR_BODY:-}" \
+            '{
+              body: (
+                "Merged PR #" + $number + "\n" +
+                "Title: " + $title + "\n" +
+                "URL: " + $url + "\n" +
+                "Merged by: " + $mergedBy + "\n\n" +
+                "PR Body:\n" +
+                (if ($body | length) > 0 then $body else "(empty)" end)
+              )
+            }')
+
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            --data "$COMMENT_PAYLOAD" \
+            "$JIRA_BASE_URL/rest/api/2/issue/$ISSUE_KEY/comment"
