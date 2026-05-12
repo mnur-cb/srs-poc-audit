@@ -1,0 +1,118 @@
+name: Jira Comment Reusable
+
+on:
+  workflow_call:
+    inputs:
+      jira_story:
+        description: Optional Jira issue key override (for example, SAT-258381).
+        required: false
+        type: string
+        default: ''
+      pr_title:
+        description: Pull request title.
+        required: true
+        type: string
+      pr_url:
+        description: Pull request URL.
+        required: true
+        type: string
+      pr_body:
+        description: Pull request body.
+        required: false
+        type: string
+        default: ''
+      pr_number:
+        description: Pull request number.
+        required: true
+        type: string
+      merged_by:
+        description: GitHub login of merge actor.
+        required: true
+        type: string
+      pr_head_ref:
+        description: Source branch name.
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  post-jira-comment:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Resolve Jira issue key
+        id: jira
+        env:
+          INPUT_JIRA_STORY: ${{ inputs.jira_story }}
+          PR_TITLE: ${{ inputs.pr_title }}
+          PR_HEAD_REF: ${{ inputs.pr_head_ref }}
+          DEFAULT_JIRA_KEY: SAT-258381
+        run: |
+          set -euo pipefail
+
+          ISSUE_KEY=""
+
+          if [ -n "$INPUT_JIRA_STORY" ]; then
+            ISSUE_KEY="$INPUT_JIRA_STORY"
+          fi
+
+          if [ -z "$ISSUE_KEY" ]; then
+            ISSUE_KEY=$(printf '%s\n%s\n' "$PR_TITLE" "$PR_HEAD_REF" | grep -Eo '[A-Z][A-Z0-9]+-[0-9]+' | head -n1 || true)
+          fi
+
+          if [ -z "$ISSUE_KEY" ]; then
+            ISSUE_KEY="$DEFAULT_JIRA_KEY"
+          fi
+
+          echo "issue_key=$ISSUE_KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Post merged PR body to Jira
+        env:
+          JIRA_BASE_URL: https://collegeboard.atlassian.net
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          ISSUE_KEY: ${{ steps.jira.outputs.issue_key }}
+          PR_TITLE: ${{ inputs.pr_title }}
+          PR_URL: ${{ inputs.pr_url }}
+          PR_BODY: ${{ inputs.pr_body }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          MERGED_BY: ${{ inputs.merged_by }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${JIRA_USER_EMAIL:-}" ] || [ -z "${JIRA_API_TOKEN:-}" ]; then
+            echo "Required secrets are missing: JIRA_USER_EMAIL and/or JIRA_API_TOKEN"
+            exit 1
+          fi
+
+          COMMENT_PAYLOAD=$(jq -n \
+            --arg title "$PR_TITLE" \
+            --arg url "$PR_URL" \
+            --arg number "$PR_NUMBER" \
+            --arg mergedBy "$MERGED_BY" \
+            --arg body "${PR_BODY:-}" \
+            '{
+              body: (
+                "Merged PR #" + $number + "\n" +
+                "Title: " + $title + "\n" +
+                "URL: " + $url + "\n" +
+                "Merged by: " + $mergedBy + "\n\n" +
+                "PR Body:\n" +
+                (if ($body | length) > 0 then $body else "(empty)" end)
+              )
+            }')
+
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            --data "$COMMENT_PAYLOAD" \
+            "$JIRA_BASE_URL/rest/api/2/issue/$ISSUE_KEY/comment"
