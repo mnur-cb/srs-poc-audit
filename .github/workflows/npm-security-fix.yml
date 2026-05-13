@@ -403,7 +403,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET_REPO: ${{ github.repository }}
           JIRA_STORY: ${{ inputs.jira_story != '' && inputs.jira_story || 'SAT-258381' }}
-          PR_TITLE: ${{ inputs.jira_story != '' && format('{0}: chore(security): automated npm audit fixes', inputs.jira_story) || 'chore(security): automated npm audit fixes' }}
+          PR_TITLE: "${{ inputs.jira_story != '' && format('{0}: chore(security): automated npm audit fixes', inputs.jira_story) || 'chore(security): automated npm audit fixes' }}"
           PR_NUMBER: ${{ steps.cpr.outputs.pull-request-number }}
           PR_URL: https://github.com/${{ github.repository }}/pull/${{ steps.cpr.outputs.pull-request-number }}
           PR_HEAD_REF: ${{ inputs.jira_story != '' && inputs.jira_story || 'chore/npm-audit' }}
