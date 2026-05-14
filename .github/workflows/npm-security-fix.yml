@@ -28,7 +28,6 @@ on:
 
 jobs:
   audit-and-fix:
-    if: github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
 
     concurrency:
