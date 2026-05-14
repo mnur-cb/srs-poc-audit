@@ -402,7 +402,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET_REPO: ${{ github.repository }}
-          JIRA_STORY: ${{ inputs.jira_story != '' && inputs.jira_story || 'SAT-258381' }}
+          JIRA_STORY: ${{ inputs.jira_story }}
           PR_TITLE: "${{ inputs.jira_story != '' && format('{0}: chore(security): automated npm audit fixes', inputs.jira_story) || 'chore(security): automated npm audit fixes' }}"
           PR_NUMBER: ${{ steps.cpr.outputs.pull-request-number }}
           PR_URL: https://github.com/${{ github.repository }}/pull/${{ steps.cpr.outputs.pull-request-number }}
@@ -431,12 +431,18 @@ jobs:
               event_type: $event_type,
               client_payload: {
                 jira_story: $jira_story,
-                pr_title: $pr_title,
-                pr_url: $pr_url,
-                pr_body: $pr_body,
-                pr_number: $pr_number,
-                merged_by: $merged_by,
-                pr_head_ref: $pr_head_ref
+                pull_request: {
+                  title: $pr_title,
+                  html_url: $pr_url,
+                  body: $pr_body,
+                  number: $pr_number,
+                  head: {
+                    ref: $pr_head_ref
+                  },
+                  merged_by: {
+                    login: $merged_by
+                  }
+                }
               }
             }')
 
