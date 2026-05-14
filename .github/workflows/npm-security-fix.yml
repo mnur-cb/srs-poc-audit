@@ -397,7 +397,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Notify caller repository listener
-        if: steps.fix.outputs.changed == 'true' && inputs.enable_auto_merge
+        if: steps.fix.outputs.changed == 'true' && inputs.enable_auto_merge && inputs.jira_story != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET_REPO: ${{ github.repository }}
